@@ -24,6 +24,8 @@
 	<string>Errands reads your calendar events to show today's schedule.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Errands reads your calendar events to show today's schedule.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Errands uses your location to show transit directions to calendar events.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

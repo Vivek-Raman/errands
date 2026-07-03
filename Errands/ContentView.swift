@@ -31,6 +31,14 @@ struct ContentView: View {
                     .padding(.vertical, 8)
                 }
 
+                Section {
+                    NavigationLink {
+                        CreateTripView()
+                    } label: {
+                        Label("Plan a new trip", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    }
+                }
+
                 content
             }
             .navigationTitle("Errands")
@@ -91,7 +99,15 @@ struct ContentView: View {
             } else {
                 Section {
                     ForEach(calendarStore.events) { event in
-                        EventRow(event: event)
+                        if event.location == nil {
+                            EventRow(event: event)
+                        } else {
+                            NavigationLink {
+                                EventDetailView(event: event)
+                            } label: {
+                                EventRow(event: event)
+                            }
+                        }
                     }
                 }
             }

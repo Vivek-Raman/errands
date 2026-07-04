@@ -13,4 +13,5 @@ Errands is a native iOS SwiftUI app for planning trips with multiple stops using
 
 ## Build Notes
 
-- The first build attempt only failed because this machine has iPhone 17 simulators, not iPhone 16. I’m rerunning against the installed iPhone 17 simulator to get real compile errors.
+- Use the installed iPhone 17 simulator destination for build checks unless the project targets change.
+- After making changes, build the app to verify compilation. Do not launch or verify it in the simulator unless the user explicitly asks.

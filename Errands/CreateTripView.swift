@@ -12,61 +12,67 @@ struct CreateTripView: View {
     @StateObject private var locationProvider = UserLocationProvider()
     @State private var hasAddedUserStop = false
 
+    private let cameraBreathingRoomRatio = 0.2
+
     var body: some View {
-        let markerViews = stops.map { stop in
-            Marker(stop.label, coordinate: coordinate(for: stop))
-        }
-        let polylineViews = stops.indices.dropLast().map { index in
-            MapPolyline(
-                geodesicPolyline(
-                    from: coordinate(for: stops[index]),
-                    to: coordinate(for: stops[index + 1])
+        GeometryReader { geometry in
+            let markerViews = stops.map { stop in
+                Marker(stop.label, coordinate: coordinate(for: stop))
+            }
+            let polylineViews = stops.indices.dropLast().map { index in
+                MapPolyline(
+                    geodesicPolyline(
+                        from: coordinate(for: stops[index]),
+                        to: coordinate(for: stops[index + 1])
+                    )
                 )
-            )
-            .stroke(.blue, lineWidth: 4)
-        }
-
-        Map(position: $cameraPosition) {
-            UserAnnotation()
-
-            ForEach(Array(markerViews.enumerated()), id: \.offset) { _, marker in
-                marker
+                .stroke(.blue, lineWidth: 4)
             }
-            ForEach(Array(polylineViews.enumerated()), id: \.offset) { _, polyline in
-                polyline
+
+            Map(position: $cameraPosition) {
+                UserAnnotation()
+
+                ForEach(Array(markerViews.enumerated()), id: \.offset) { _, marker in
+                    marker
+                }
+                ForEach(Array(polylineViews.enumerated()), id: \.offset) { _, polyline in
+                    polyline
+                }
+            }
+            .mapControls {
+                MapCompass()
+                MapScaleView()
+                MapUserLocationButton()
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .onAppear {
+                isShowingStopsSheet = true
+                locationProvider.requestLocation()
+                updateCameraForStops(in: geometry.size, animated: false)
+            }
+            .onChange(of: stops) { _, _ in
+                updateCameraForStops(in: geometry.size)
+            }
+            .onChange(of: stopsSheetHeight) { _, _ in
+                updateCameraForStops(in: geometry.size)
+            }
+            .onChange(of: geometry.size) { _, size in
+                updateCameraForStops(in: size)
             }
         }
-        .mapControls {
-            MapCompass()
-            MapScaleView()
-            MapUserLocationButton()
-        }
-        .ignoresSafeArea(edges: .bottom)
         .navigationTitle("Create Trip")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isShowingStopsSheet) {
             CreateTripStopsSheet(stops: $stops, sheetHeight: $stopsSheetHeight, onAddStop: addStop)
                 .presentationDetents([.height(220), .medium, .large], selection: $stopsSheetDetent)
                 .presentationDragIndicator(.visible)
-                .presentationCornerRadius(24)
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
                 .interactiveDismissDisabled()
-        }
-        .onAppear {
-            isShowingStopsSheet = true
-            locationProvider.requestLocation()
-            updateCameraForStops()
-        }
-        .onChange(of: stops) { _, _ in
-            updateCameraForStops()
         }
         .onChange(of: locationProvider.location) { _, location in
             guard !hasAddedUserStop, let location else { return }
             hasAddedUserStop = true
             addUserLocationStop(location)
-        }
-        .onChange(of: stopsSheetHeight) { _, _ in
-            updateCameraForStops()
         }
     }
 
@@ -100,21 +106,66 @@ struct CreateTripView: View {
         }
     }
 
-    private func updateCameraForStops() {
+    private func updateCameraForStops(in mapSize: CGSize, animated: Bool = true) {
         guard !stops.isEmpty else {
             cameraPosition = .userLocation(fallback: .automatic)
             return
         }
 
-        if stops.count == 1 {
+        guard mapSize.width > 0, mapSize.height > 0 else {
+            return
+        }
+
+        if animated {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                cameraPosition = .rect(offsetStopBounds(in: mapSize))
+            }
+        } else {
+            cameraPosition = .rect(offsetStopBounds(in: mapSize))
+        }
+    }
+
+    private func offsetStopBounds(in mapSize: CGSize) -> MKMapRect {
+        let mapAspectRatio = Double(mapSize.width / mapSize.height)
+        var cameraRect = aspectFittedRect(containing: paddedStopBounds(), aspectRatio: mapAspectRatio)
+        let extraPaddingX = cameraRect.size.width * cameraBreathingRoomRatio
+        let extraPaddingY = cameraRect.size.height * cameraBreathingRoomRatio
+
+        cameraRect = cameraRect.insetBy(dx: -extraPaddingX, dy: -extraPaddingY)
+        let coveredMapHeight = min(stopsSheetHeight, mapSize.height)
+        let verticalOffset = cameraRect.size.height * Double(coveredMapHeight / mapSize.height) / 2
+
+        cameraRect.origin.y += verticalOffset
+        return cameraRect
+    }
+
+    private func aspectFittedRect(containing rect: MKMapRect, aspectRatio: Double) -> MKMapRect {
+        guard aspectRatio > 0 else {
+            return rect
+        }
+
+        var fittedRect = rect
+        let rectAspectRatio = fittedRect.size.width / fittedRect.size.height
+
+        if rectAspectRatio > aspectRatio {
+            let targetHeight = fittedRect.size.width / aspectRatio
+            fittedRect = fittedRect.insetBy(dx: 0, dy: -(targetHeight - fittedRect.size.height) / 2)
+        } else {
+            let targetWidth = fittedRect.size.height * aspectRatio
+            fittedRect = fittedRect.insetBy(dx: -(targetWidth - fittedRect.size.width) / 2, dy: 0)
+        }
+
+        return fittedRect
+    }
+
+    private func paddedStopBounds() -> MKMapRect {
+        guard stops.count > 1 else {
             let region = MKCoordinateRegion(
                 center: coordinate(for: stops[0]),
                 latitudinalMeters: 1_500,
                 longitudinalMeters: 1_500
             )
-            let mapRect = MKMapRect(for: region)
-            cameraPosition = .rect(mapRect)
-            return
+            return mapRect(for: region)
         }
 
         var boundingRect = MKMapRect.null
@@ -124,14 +175,31 @@ struct CreateTripView: View {
 
         let paddingX = max(boundingRect.size.width * 0.25, 1_000)
         let paddingY = max(boundingRect.size.height * 0.25, 1_000)
-        let paddedRect = boundingRect.insetBy(dx: -paddingX, dy: -paddingY)
-        cameraPosition = .rect(paddedRect)
+        return boundingRect.insetBy(dx: -paddingX, dy: -paddingY)
     }
 
     private func mapRect(for coordinate: CLLocationCoordinate2D) -> MKMapRect {
         MKMapRect(
             origin: MKMapPoint(coordinate),
             size: MKMapSize(width: 1, height: 1)
+        )
+    }
+
+    private func mapRect(for region: MKCoordinateRegion) -> MKMapRect {
+        let topLeft = MKMapPoint(CLLocationCoordinate2D(
+            latitude: region.center.latitude + region.span.latitudeDelta / 2,
+            longitude: region.center.longitude - region.span.longitudeDelta / 2
+        ))
+        let bottomRight = MKMapPoint(CLLocationCoordinate2D(
+            latitude: region.center.latitude - region.span.latitudeDelta / 2,
+            longitude: region.center.longitude + region.span.longitudeDelta / 2
+        ))
+
+        return MKMapRect(
+            x: min(topLeft.x, bottomRight.x),
+            y: min(topLeft.y, bottomRight.y),
+            width: abs(topLeft.x - bottomRight.x),
+            height: abs(topLeft.y - bottomRight.y)
         )
     }
 }
@@ -157,8 +225,6 @@ private struct CreateTripStopsSheet: View {
                             Image(systemName: "plus")
                                 .font(.headline)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                         .accessibilityLabel("Add stop")
                     }
                 }
@@ -186,43 +252,33 @@ private struct CreateTripStopsSheet: View {
             )
                 .presentationDetents([.height(280), .large], selection: $addStopSheetDetent)
                 .presentationDragIndicator(.visible)
-                .presentationCornerRadius(24)
         }
     }
 
     @ViewBuilder
     private var content: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        List {
             if stops.isEmpty {
                 EmptyStopsRow()
-                    .padding(.horizontal, 20)
             } else {
-                List {
-                    ForEach(stops) { stop in
-                        TimelineStopRow(
-                            stop: stop,
-                            isFirst: stops.first?.id == stop.id,
-                            isLast: stops.last?.id == stop.id
-                        )
-                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-                        .listRowSeparator(.hidden)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                if let index = stops.firstIndex(of: stop) {
-                                    stops.remove(at: index)
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                ForEach(stops) { stop in
+                    TimelineStopRow(
+                        stop: stop,
+                        isFirst: stops.first?.id == stop.id,
+                        isLast: stops.last?.id == stop.id
+                    )
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            if let index = stops.firstIndex(of: stop) {
+                                stops.remove(at: index)
                             }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
                     }
                 }
-                .listStyle(.plain)
-                .frame(maxHeight: 280)
             }
         }
-        .padding(.top, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func addStop(_ stop: TripStop) {
@@ -255,25 +311,20 @@ private struct AddStopLocationSourceSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        VStack(spacing: 16) {
-            searchField
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-
+        List {
             if searchStore.trimmedQuery.isEmpty {
                 Button {
                     dismiss()
                 } label: {
                     Label("From calendar", systemImage: "calendar")
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .padding(.horizontal, 20)
+            } else {
+                searchResultsView
             }
-
-            searchResultsView
         }
+        .searchable(text: $searchStore.query, prompt: "Search for a place or address")
+        .textInputAutocapitalization(.words)
+        .autocorrectionDisabled()
         .task {
             searchStore.prepareForSearch()
         }
@@ -282,59 +333,27 @@ private struct AddStopLocationSourceSheet: View {
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-
-            TextField("Search for a place or address", text: $searchStore.query)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-
-            if !searchStore.query.isEmpty {
-                Button {
-                    searchStore.reset()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
     @ViewBuilder
     private var searchResultsView: some View {
-        if searchStore.trimmedQuery.isEmpty {
-            Spacer(minLength: 0)
-        } else {
-            List {
-                if searchStore.isSearching {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Searching...")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                ForEach(searchStore.results) { result in
-                    Button {
-                        selectResult(result)
-                    } label: {
-                        LocationSearchResultRow(result: result)
-                    }
-                }
-
-                if let errorMessage = searchStore.errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.secondary)
-                }
+        if searchStore.isSearching {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Searching...")
+                    .foregroundStyle(.secondary)
             }
-            .listStyle(.plain)
+        }
+
+        ForEach(searchStore.results) { result in
+            Button {
+                selectResult(result)
+            } label: {
+                LocationSearchResultRow(result: result)
+            }
+        }
+
+        if let errorMessage = searchStore.errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -782,21 +801,5 @@ private struct TimelineStopRow: View {
             TripStopRow(stop: stop)
         }
         .padding(.vertical, 6)
-    }
-}
-
-extension MKMapRect {
-    /// Initializes MKMapRect from MKCoordinateRegion
-    init(for region: MKCoordinateRegion) {
-        let a = MKMapPoint(CLLocationCoordinate2D(
-            latitude: region.center.latitude + region.span.latitudeDelta / 2,
-            longitude: region.center.longitude - region.span.longitudeDelta / 2))
-        let b = MKMapPoint(CLLocationCoordinate2D(
-            latitude: region.center.latitude - region.span.latitudeDelta / 2,
-            longitude: region.center.longitude + region.span.longitudeDelta / 2))
-        self = MKMapRect(
-            origin: MKMapPoint(x: min(a.x, b.x), y: min(a.y, b.y)),
-            size: MKMapSize(width: abs(a.x - b.x), height: abs(a.y - b.y))
-        )
     }
 }
